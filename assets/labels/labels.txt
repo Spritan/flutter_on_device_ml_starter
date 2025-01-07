@@ -1,0 +1,9 @@
+Citrus_greening
+Gummosis
+Late_blight
+Leaf_scorch
+Scab
+Sooty_mould
+Yellow leaf curl
+healthy
+powdery_mildew
