@@ -39,6 +39,9 @@ class ZeroShotController extends GetxController {
   final _modelLoadingStatus = RxString('Not started');
   final _processingStatus = RxString('');
 
+  // Cache for text embeddings
+  List<List>? _cachedTextEmbeddings;
+
   // Getters
   File? get image => _image.value;
   bool get result => _result.value;
@@ -275,6 +278,12 @@ class ZeroShotController extends GetxController {
   Future<List<List>> _getTextEmbeddings() async {
     debugPrint('$tag: Getting text embeddings');
 
+    // Return cached embeddings if available
+    if (_cachedTextEmbeddings != null) {
+      debugPrint('$tag: Using cached text embeddings');
+      return _cachedTextEmbeddings!;
+    }
+
     try {
       // Load tokenized prompts
       final promptsFile = await _getAssetFile(promptsPath);
@@ -303,6 +312,9 @@ class ZeroShotController extends GetxController {
 
       // Clean up
       await isolateInterpreter.close();
+
+      // Cache the embeddings
+      _cachedTextEmbeddings = embeddings;
 
       debugPrint('$tag: Generated ${embeddings.shape} text embeddings');
       return embeddings;
@@ -354,7 +366,7 @@ class ZeroShotController extends GetxController {
     }
 
     if (normA == 0 || normB == 0) {
-      return 0.0; // Handle zero vectors
+      return 0.0;
     }
 
     return dotProduct / (sqrt(normA) * sqrt(normB));
@@ -369,5 +381,16 @@ class ZeroShotController extends GetxController {
       snackPosition: SnackPosition.BOTTOM,
       duration: const Duration(seconds: 3),
     );
+  }
+
+  @override
+  void onClose() {
+    // Clean up resources
+    _imageEncoder.value?.close();
+    _textEncoder.value?.close();
+    _cachedTextEmbeddings = null;
+    _image.value = null;
+    _similarities.clear();
+    super.onClose();
   }
 }

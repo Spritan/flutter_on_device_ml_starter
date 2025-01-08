@@ -1,7 +1,8 @@
 import 'dart:io';
+import 'package:get/get.dart';
+import 'zeroshot_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:path_provider/path_provider.dart';
@@ -116,15 +117,26 @@ class ClassificationController extends GetxController {
     _processingStatus.value = 'Selecting image...';
 
     try {
-      final XFile? pickedFile = await _picker.pickImage(source: source);
-      if (pickedFile == null) {
-        debugPrint('$tag: No image selected');
-        _processingStatus.value = '';
-        return;
+      File? imageFile;
+      if (Get.isRegistered<ZeroShotController>()) {
+        // Try to get image from ZeroShot controller first
+        final zeroShotController = Get.find<ZeroShotController>();
+        imageFile = zeroShotController.image;
       }
 
-      debugPrint('$tag: Image selected: ${pickedFile.path}');
-      _image.value = File(pickedFile.path);
+      // If no image from ZeroShot, get from source
+      if (imageFile == null) {
+        final XFile? pickedFile = await _picker.pickImage(source: source);
+        if (pickedFile == null) {
+          debugPrint('$tag: No image selected');
+          _processingStatus.value = '';
+          return;
+        }
+        imageFile = File(pickedFile.path);
+      }
+
+      debugPrint('$tag: Image selected: ${imageFile.path}');
+      _image.value = imageFile;
       _prediction.value = '';
       _isLoading.value = true;
 
