@@ -42,3 +42,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 assets/models/model.pt
+assets/labels
+assets/models/CLIPImageEncoder.tflite
+assets/models/CLIPTextEncoder.tflite
+assets/models/tokenized_prompts.pb
+assets/labels/labels.txt
