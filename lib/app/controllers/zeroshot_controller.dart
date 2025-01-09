@@ -2,32 +2,18 @@ import 'dart:io';
 import 'dart:math' show sqrt;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+// import 'package:flutter/services.dart' show rootBundle;
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
 import 'package:ondevice_ml/generated/clip_tf/tokenized_prompts.pb.dart';
-
-// Extension to help with tensor reshaping
-extension Float32ListReshape on Float32List {
-  Float32List reshape(List<int> shape) {
-    assert(length == shape.reduce((a, b) => a * b),
-        'Shape dimensions must match array length');
-    return this;
-  }
-}
+import 'settings_controller.dart';
 
 class ZeroShotController extends GetxController {
   static ZeroShotController get to => Get.find();
   static const String tag = 'ZeroShotController';
-
-  // Model paths
-  static const String imageEncoderPath =
-      'assets/models/CLIPImageEncoder.tflite';
-  static const String textEncoderPath = 'assets/models/CLIPTextEncoder.tflite';
-  static const String promptsPath = 'assets/models/tokenized_prompts.pb';
 
   final _imageEncoder = Rxn<Interpreter>();
   final _textEncoder = Rxn<Interpreter>();
@@ -66,21 +52,49 @@ class ZeroShotController extends GetxController {
     _modelLoadingStatus.value = 'Loading models...';
 
     try {
-      debugPrint('$tag: Loading image encoder from $imageEncoderPath');
+      final settingsController = Get.find<SettingsController>();
+      final dir = await getApplicationDocumentsDirectory();
+
+      // Check if all required models are downloaded
+      final requiredModels = settingsController.zeroshotModels
+          .where((model) => !model.isDownloaded)
+          .map((model) => model.name)
+          .toList();
+
+      if (requiredModels.isNotEmpty) {
+        final missingModels = requiredModels.join(", ");
+        _modelLoadingStatus.value =
+            'Missing models: $missingModels\nPlease download from Settings';
+        _modelLoaded.value = false;
+        _showMessage(
+            'Please download required models from Settings:\n$missingModels',
+            isError: true);
+        return;
+      }
+
+      debugPrint('$tag: Loading image encoder');
       _modelLoadingStatus.value = 'Loading image encoder...';
-      final imageEncoderFile = await _getAssetFile(imageEncoderPath);
+      final imageEncoderModel = settingsController.zeroshotModels
+          .firstWhere((model) => model.localPath == 'CLIPImageEncoder.tflite');
+      final imageEncoderFile =
+          File('${dir.path}/${imageEncoderModel.localPath}');
       _imageEncoder.value = Interpreter.fromFile(imageEncoderFile);
       _imageEncoder.value!.allocateTensors();
 
-      debugPrint('$tag: Loading text encoder from $textEncoderPath');
+      debugPrint('$tag: Loading text encoder');
       _modelLoadingStatus.value = 'Loading text encoder...';
-      final textEncoderFile = await _getAssetFile(textEncoderPath);
+      final textEncoderModel = settingsController.zeroshotModels
+          .firstWhere((model) => model.localPath == 'CLIPTextEncoder.tflite');
+      final textEncoderFile = File('${dir.path}/${textEncoderModel.localPath}');
       _textEncoder.value = Interpreter.fromFile(textEncoderFile);
       _textEncoder.value!.allocateTensors();
 
-      debugPrint('$tag: Loading tokenized prompts from $promptsPath');
+      debugPrint('$tag: Loading tokenized prompts');
       _modelLoadingStatus.value = 'Loading prompts...';
-      await _getAssetFile(promptsPath);
+      final promptsModel = settingsController.zeroshotModels
+          .firstWhere((model) => model.localPath == 'tokenized_prompts.pb');
+      final promptsFile = File('${dir.path}/${promptsModel.localPath}');
+      await _parseTokenizedPrompts(await promptsFile.readAsBytes());
 
       _modelLoaded.value = true;
       _modelLoadingStatus.value = 'Models loaded successfully';
@@ -100,20 +114,28 @@ class ZeroShotController extends GetxController {
     debugPrint('$tag: ====== MODEL LOADING COMPLETE ======\n');
   }
 
-  Future<File> _getAssetFile(String assetPath) async {
-    try {
-      final byteData = await rootBundle.load(assetPath);
-      final bytes = byteData.buffer.asUint8List();
-
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
-      await tempFile.writeAsBytes(bytes);
-
-      return tempFile;
-    } catch (e) {
-      throw Exception('Asset not found: $assetPath');
-    }
+  Future<void> reloadModels() async {
+    _modelLoaded.value = false;
+    _imageEncoder.value?.close();
+    _textEncoder.value?.close();
+    _cachedTextEmbeddings = null;
+    await _loadModels();
   }
+
+  // Future<File> _getAssetFile(String assetPath) async {
+  //   try {
+  //     final byteData = await rootBundle.load(assetPath);
+  //     final bytes = byteData.buffer.asUint8List();
+
+  //     final tempDir = await getTemporaryDirectory();
+  //     final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
+  //     await tempFile.writeAsBytes(bytes);
+
+  //     return tempFile;
+  //   } catch (e) {
+  //     throw Exception('Asset not found: $assetPath');
+  //   }
+  // }
 
   Future<void> getImage(ImageSource source) async {
     debugPrint('\n$tag: ====== STARTING IMAGE CAPTURE ======');
@@ -286,7 +308,11 @@ class ZeroShotController extends GetxController {
 
     try {
       // Load tokenized prompts
-      final promptsFile = await _getAssetFile(promptsPath);
+      final settingsController = Get.find<SettingsController>();
+      final dir = await getApplicationDocumentsDirectory();
+      final promptsModel = settingsController.zeroshotModels
+          .firstWhere((model) => model.localPath == 'tokenized_prompts.pb');
+      final promptsFile = File('${dir.path}/${promptsModel.localPath}');
       final promptsBytes = await promptsFile.readAsBytes();
       final tokenizedInputs = await _parseTokenizedPrompts(promptsBytes);
 

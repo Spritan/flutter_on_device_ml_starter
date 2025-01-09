@@ -1,23 +1,27 @@
 import 'dart:io';
 import 'package:get/get.dart';
-import 'zeroshot_controller.dart';
+import 'settings_controller.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:ondevice_ml/app/config/model_config.dart';
+import 'package:ondevice_ml/app/controllers/zeroshot_controller.dart';
 
 class ClassificationController extends GetxController {
-  static ClassificationController get to => Get.find();
   static const String tag = 'ClassificationController';
 
   final _model = Rxn<ClassificationModel>();
+  final _labels = RxList<String>([]);
   final _image = Rxn<File>();
   final _prediction = RxString('');
   final _isLoading = RxBool(false);
   final _modelLoaded = RxBool(false);
   final _modelLoadingStatus = RxString('Not started');
   final _processingStatus = RxString('');
+  // static const int numClasses =
+  //     1000; // Total number of classes including background
 
   // Getters
   File? get image => _image.value;
@@ -33,58 +37,63 @@ class ClassificationController extends GetxController {
   void onInit() {
     super.onInit();
     debugPrint('$tag: Initializing controller');
-    _loadModel();
+    _loadModels();
   }
 
-  Future<void> _loadModel() async {
+  Future<void> _loadModels() async {
     debugPrint('\n$tag: ====== STARTING MODEL LOADING ======');
-    _modelLoadingStatus.value = 'Loading model...';
+    _modelLoadingStatus.value = 'Loading models...';
 
     try {
-      debugPrint('$tag: Checking assets directory');
-      _modelLoadingStatus.value = 'Checking model files...';
+      final settingsController = Get.find<SettingsController>();
+      final dir = await getApplicationDocumentsDirectory();
 
-      // Verify model file exists
-      try {
-        final modelFile = await _getAssetFile('assets/models/model.pt');
-        debugPrint('$tag: Model file size: ${await modelFile.length()} bytes');
-      } catch (e) {
-        throw Exception('Model file not found: $e');
+      // Check if all required models are downloaded
+      final requiredModels = settingsController.classificationModels
+          .where((model) => !model.isDownloaded)
+          .map((model) => model.name)
+          .toList();
+
+      if (requiredModels.isNotEmpty) {
+        final missingModels = requiredModels.join(", ");
+        _modelLoadingStatus.value =
+            'Missing models: $missingModels\nPlease download from Settings';
+        _modelLoaded.value = false;
+        _showMessage(
+            'Please download required models from Settings:\n$missingModels',
+            isError: true);
+        return;
       }
 
-      // Verify and read labels file
-      debugPrint('$tag: Reading labels file');
-      _modelLoadingStatus.value = 'Reading labels...';
+      debugPrint('$tag: Loading classification model');
+      _modelLoadingStatus.value = 'Loading classification model...';
+      final modelFile = settingsController.classificationModels
+          .firstWhere((model) => model.localPath == ModelPaths.plantClassifier);
 
-      late final int labelCount;
-      try {
-        final labelsFile = await _getAssetFile('assets/labels/labels.txt');
-        final labels = await labelsFile.readAsLines();
-        labelCount = labels.where((line) => line.trim().isNotEmpty).length + 1;
-        debugPrint('$tag: Found $labelCount labels');
-      } catch (e) {
-        throw Exception('Failed to read labels file: $e');
-      }
+      debugPrint('$tag: Loading labels');
+      _modelLoadingStatus.value = 'Loading labels...';
+      final labelsContent =
+          await rootBundle.loadString('assets/labels/labels.txt');
+      _labels.value = labelsContent
+          .split('\n')
+          .where((line) => line.trim().isNotEmpty)
+          .toList();
+      debugPrint('$tag: Loaded ${_labels.length} labels');
 
-      // Load the model
-      debugPrint('$tag: Loading PyTorch model');
-      _modelLoadingStatus.value = 'Initializing model...';
+      // Load the model using absolute path
+      final modelPath = '${dir.path}/${modelFile.localPath}';
+      debugPrint('$tag: Loading model from: $modelPath');
+      _model.value = await PytorchLite.loadClassificationModel(
+          modelPath, 224, 224, _labels.length + 1, // Add 1 for background class
+          labelPath: 'assets/labels/labels.txt',
+          modelLocation: ModelLocation.path);
 
-      final model = await PytorchLite.loadClassificationModel(
-        'assets/models/model.pt',
-        224,
-        224,
-        labelCount,
-        labelPath: 'assets/labels/labels.txt',
-      );
-
-      _model.value = model;
       _modelLoaded.value = true;
-      _modelLoadingStatus.value = 'Model loaded successfully';
-      debugPrint('$tag: Model loaded successfully');
-      _showMessage('Model loaded successfully');
+      _modelLoadingStatus.value = 'Models loaded successfully';
+      debugPrint('$tag: Models loaded successfully');
+      _showMessage('Models loaded successfully');
     } catch (e, stackTrace) {
-      final errorMsg = 'Failed to load model: $e';
+      final errorMsg = 'Failed to load models: $e';
       debugPrint('\n$tag: !!!!! MODEL LOADING ERROR !!!!');
       debugPrint('$tag: Error type: ${e.runtimeType}');
       debugPrint('$tag: Error message: $e');
@@ -97,19 +106,9 @@ class ClassificationController extends GetxController {
     debugPrint('$tag: ====== MODEL LOADING COMPLETE ======\n');
   }
 
-  Future<File> _getAssetFile(String assetPath) async {
-    try {
-      final byteData = await rootBundle.load(assetPath);
-      final bytes = byteData.buffer.asUint8List();
-
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
-      await tempFile.writeAsBytes(bytes);
-
-      return tempFile;
-    } catch (e) {
-      throw Exception('Asset not found: $assetPath');
-    }
+  Future<void> reloadModels() async {
+    _modelLoaded.value = false;
+    await _loadModels();
   }
 
   Future<void> getImage(ImageSource source) async {
@@ -160,7 +159,6 @@ class ClassificationController extends GetxController {
       debugPrint('$tag: Prerequisites not met:');
       debugPrint('$tag: - Image: ${_image.value != null}');
       debugPrint('$tag: - Model: ${_model.value != null}');
-
       _showMessage('Model or image not ready', isError: true);
       _isLoading.value = false;
       _processingStatus.value = '';
@@ -176,9 +174,10 @@ class ClassificationController extends GetxController {
       debugPrint('$tag: Running model inference');
       _processingStatus.value = 'Running classification...';
       final prediction = await _model.value!.getImagePrediction(bytes);
-      debugPrint('$tag: Got prediction: $prediction');
 
-      _prediction.value = 'Prediction: $prediction';
+      _prediction.value = prediction;
+      debugPrint('$tag: Prediction: $prediction');
+
       _isLoading.value = false;
       _processingStatus.value = '';
     } catch (e, stackTrace) {

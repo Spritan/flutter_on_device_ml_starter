@@ -10,8 +10,20 @@ class ZeroShotView extends GetView<ZeroShotController> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Zero Shot Detection'),
+        title: const Text('Zero-Shot Plant Detection'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          Obx(() {
+            if (controller.modelLoaded) {
+              return IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: controller.reloadModels,
+                tooltip: 'Reload Models',
+              );
+            }
+            return const SizedBox.shrink();
+          }),
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(

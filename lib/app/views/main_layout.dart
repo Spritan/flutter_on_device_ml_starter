@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'classification_view.dart';
 import 'zeroshot_view.dart';
 import 'complete_workflow_view.dart';
+import 'settings_view.dart';
 
 class MainLayout extends StatelessWidget {
   MainLayout({super.key});
@@ -13,6 +14,7 @@ class MainLayout extends StatelessWidget {
     const CompleteWorkflowView(),
     const ZeroShotView(),
     const ClassificationView(),
+    const SettingsView(),
   ];
 
   @override
@@ -35,6 +37,10 @@ class MainLayout extends StatelessWidget {
             NavigationDestination(
               icon: Icon(Icons.image_search),
               label: 'Classification',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings),
+              label: 'Settings',
             ),
           ],
         ),

@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'app/controllers/classification_controller.dart';
-import 'app/controllers/zeroshot_controller.dart';
+import 'package:get_storage/get_storage.dart';
+import 'app/bindings/app_binding.dart';
 import 'app/views/main_layout.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize controllers
-  Get.put(ZeroShotController());
-  Get.put(ClassificationController());
+  // Initialize GetStorage
+  await GetStorage.init();
 
   runApp(const MyApp());
 }
@@ -25,6 +24,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
         useMaterial3: true,
       ),
+      initialBinding: AppBinding(),
       home: MainLayout(),
     );
   }
