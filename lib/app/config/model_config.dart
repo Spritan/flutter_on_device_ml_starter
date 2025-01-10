@@ -54,11 +54,11 @@ class ModelConfigs {
           'localPath': ModelPaths.plantClassifier,
           'type': 'classification',
         },
-        // {
-        //   'name': 'Plant Labels',
-        //   'url': ModelUrls.plantLabels,
-        //   'localPath': ModelPaths.plantLabels,
-        //   'type': 'classification',
-        // },
+        {
+          'name': 'Plant Labels',
+          'url': ModelUrls.plantLabels,
+          'localPath': ModelPaths.plantLabels,
+          'type': 'classification',
+        },
       ];
 }

@@ -1,16 +1,18 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:get/get.dart';
 import 'settings_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pytorch_lite/pytorch_lite.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:ondevice_ml/app/config/model_config.dart';
 import 'package:ondevice_ml/app/controllers/zeroshot_controller.dart';
 
 class ClassificationController extends GetxController {
   static const String tag = 'ClassificationController';
+  static ClassificationModel? _cachedModel;
+  static List<String>? _cachedLabels;
 
   final _model = Rxn<ClassificationModel>();
   final _labels = RxList<String>([]);
@@ -20,10 +22,7 @@ class ClassificationController extends GetxController {
   final _modelLoaded = RxBool(false);
   final _modelLoadingStatus = RxString('Not started');
   final _processingStatus = RxString('');
-  // static const int numClasses =
-  //     1000; // Total number of classes including background
 
-  // Getters
   File? get image => _image.value;
   String get prediction => _prediction.value;
   bool get isLoading => _isLoading.value;
@@ -45,6 +44,16 @@ class ClassificationController extends GetxController {
     _modelLoadingStatus.value = 'Loading models...';
 
     try {
+      // Use cached model if available
+      if (_cachedModel != null && _cachedLabels != null) {
+        debugPrint('$tag: Using cached model and labels');
+        _model.value = _cachedModel;
+        _labels.assignAll(_cachedLabels!);
+        _modelLoaded.value = true;
+        _modelLoadingStatus.value = 'Models loaded from cache';
+        return;
+      }
+
       final settingsController = Get.find<SettingsController>();
       final dir = await getApplicationDocumentsDirectory();
 
@@ -72,8 +81,12 @@ class ClassificationController extends GetxController {
 
       debugPrint('$tag: Loading labels');
       _modelLoadingStatus.value = 'Loading labels...';
-      final labelsContent =
-          await rootBundle.loadString('assets/labels/labels.txt');
+
+      // Get the directory and labels file
+      final labelsFile = File('${dir.path}/${ModelPaths.plantLabels}');
+
+      // Read and process labels
+      final labelsContent = await labelsFile.readAsString();
       _labels.value = labelsContent
           .split('\n')
           .where((line) => line.trim().isNotEmpty)
@@ -82,11 +95,18 @@ class ClassificationController extends GetxController {
 
       // Load the model using absolute path
       final modelPath = '${dir.path}/${modelFile.localPath}';
+      final labelsPath = '${dir.path}/${ModelPaths.plantLabels}';
       debugPrint('$tag: Loading model from: $modelPath');
+      debugPrint('$tag: Loading labels from: $labelsPath');
       _model.value = await PytorchLite.loadClassificationModel(
           modelPath, 224, 224, _labels.length + 1, // Add 1 for background class
-          labelPath: 'assets/labels/labels.txt',
-          modelLocation: ModelLocation.path);
+          labelPath: labelsPath,
+          modelLocation: ModelLocation.path,
+          labelsLocation: LabelsLocation.path);
+
+      // Cache the model and labels
+      _cachedModel = _model.value;
+      _cachedLabels = _labels.toList();
 
       _modelLoaded.value = true;
       _modelLoadingStatus.value = 'Models loaded successfully';
@@ -118,14 +138,17 @@ class ClassificationController extends GetxController {
     try {
       File? imageFile;
       if (Get.isRegistered<ZeroShotController>()) {
-        // Try to get image from ZeroShot controller first
         final zeroShotController = Get.find<ZeroShotController>();
         imageFile = zeroShotController.image;
       }
 
-      // If no image from ZeroShot, get from source
       if (imageFile == null) {
-        final XFile? pickedFile = await _picker.pickImage(source: source);
+        final XFile? pickedFile = await _picker.pickImage(
+          source: source,
+          maxWidth: 1024, // Limit image size
+          maxHeight: 1024,
+          imageQuality: 85, // Compress image while maintaining quality
+        );
         if (pickedFile == null) {
           debugPrint('$tag: No image selected');
           _processingStatus.value = '';
@@ -134,7 +157,18 @@ class ClassificationController extends GetxController {
         imageFile = File(pickedFile.path);
       }
 
-      debugPrint('$tag: Image selected: ${imageFile.path}');
+      // Validate file size
+      final fileSize = await imageFile.length();
+      if (fileSize > 10 * 1024 * 1024) {
+        // 10MB limit
+        _showMessage('Image size too large. Please select a smaller image.',
+            isError: true);
+        _processingStatus.value = '';
+        return;
+      }
+
+      debugPrint(
+          '$tag: Image selected: ${imageFile.path} (${fileSize ~/ 1024}KB)');
       _image.value = imageFile;
       _prediction.value = '';
       _isLoading.value = true;
@@ -168,28 +202,66 @@ class ClassificationController extends GetxController {
     try {
       _processingStatus.value = 'Processing image...';
       debugPrint('$tag: Reading image bytes');
-      final bytes = await _image.value!.readAsBytes();
+
+      late final List<int> bytes;
+      try {
+        bytes = await _image.value!.readAsBytes();
+        if (bytes.isEmpty) {
+          throw Exception('Image bytes are empty');
+        }
+      } catch (e) {
+        debugPrint('$tag: Error reading image: $e');
+        _showMessage('Error reading image. Please try again.', isError: true);
+        _isLoading.value = false;
+        _processingStatus.value = '';
+        return;
+      }
+
       debugPrint('$tag: Image size: ${bytes.length} bytes');
 
       debugPrint('$tag: Running model inference');
       _processingStatus.value = 'Running classification...';
-      final prediction = await _model.value!.getImagePrediction(bytes);
+
+      String prediction;
+      int retryCount = 0;
+      const maxRetries = 2;
+
+      while (true) {
+        try {
+          prediction =
+              await _model.value!.getImagePrediction(Uint8List.fromList(bytes));
+          break;
+        } catch (e) {
+          retryCount++;
+          if (retryCount > maxRetries) {
+            rethrow;
+          }
+          debugPrint('$tag: Retry $retryCount after error: $e');
+          await Future.delayed(Duration(milliseconds: 500 * retryCount));
+        }
+      }
 
       _prediction.value = prediction;
       debugPrint('$tag: Prediction: $prediction');
-
-      _isLoading.value = false;
-      _processingStatus.value = '';
     } catch (e, stackTrace) {
       debugPrint('\n$tag: !!!!! CLASSIFICATION ERROR !!!!');
       debugPrint('$tag: Error type: ${e.runtimeType}');
       debugPrint('$tag: Error message: $e');
       debugPrint('$tag: Stack trace:\n$stackTrace');
 
+      // Try to recover by reloading the model
+      if (_model.value == null) {
+        debugPrint('$tag: Attempting to recover by reloading model');
+        await reloadModels();
+      }
+
       _prediction.value = 'Error classifying image';
+      _showMessage('Classification failed: $e', isError: true);
+    } finally {
       _isLoading.value = false;
       _processingStatus.value = '';
-      _showMessage('Classification failed: $e', isError: true);
+      // Force garbage collection after processing
+      debugPrint('$tag: Cleaning up resources');
     }
     debugPrint('$tag: ====== CLASSIFICATION COMPLETE ======\n');
   }
@@ -203,5 +275,12 @@ class ClassificationController extends GetxController {
       snackPosition: SnackPosition.BOTTOM,
       duration: const Duration(seconds: 3),
     );
+  }
+
+  @override
+  void onClose() {
+    _cachedModel = null;
+    _cachedLabels = null;
+    super.onClose();
   }
 }
